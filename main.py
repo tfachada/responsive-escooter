@@ -2,6 +2,7 @@
 
 ## Interfaces
 import RPi.GPIO as GPIO
+import VL53L0X
 from pigpio_dht import DHT11
 from mq import MQ
 from mpu6050 import *
@@ -19,8 +20,12 @@ import csv
 import os
 import subprocess
 
+from math import *
+
 
 # SETUP AND GLOBAL VARIABLES
+
+
 
 ## Ignore "channel already in use" warning
 GPIO.setwarnings(False)
@@ -28,6 +33,7 @@ GPIO.setwarnings(False)
 ## GPIO Mode (BOARD / BCM)
 GPIO.setmode(GPIO.BCM)
 
+'''
 ## Set GPIO Pins
 TRIG_PIN_LEFT = 12
 ECHO_PIN_LEFT = 6
@@ -37,9 +43,14 @@ ECHO_PIN_MIDDLE = 26
 
 TRIG_PIN_RIGHT = 25
 ECHO_PIN_RIGHT = 24
+'''
 
 DHT_PIN = 5
+XSHUT_LEFT_PIN = 17
+XSHUT_MIDDLE_PIN = 27
+XSHUT_RIGHT_PIN = 22
 
+'''
 ## Set GPIO direction (IN / OUT)
 GPIO.setup(TRIG_PIN_LEFT, GPIO.OUT)
 GPIO.setup(ECHO_PIN_LEFT, GPIO.IN)
@@ -47,6 +58,43 @@ GPIO.setup(TRIG_PIN_MIDDLE, GPIO.OUT)
 GPIO.setup(ECHO_PIN_MIDDLE, GPIO.IN)
 GPIO.setup(TRIG_PIN_RIGHT, GPIO.OUT)
 GPIO.setup(ECHO_PIN_RIGHT, GPIO.IN)
+'''
+GPIO.setup(XSHUT_LEFT_PIN, GPIO.OUT)
+GPIO.setup(XSHUT_MIDDLE_PIN, GPIO.OUT)
+GPIO.setup(XSHUT_RIGHT_PIN, GPIO.OUT)
+
+# Set all shutdown pins low to turn off each VL53L0X
+GPIO.output(XSHUT_LEFT_PIN, GPIO.LOW)
+GPIO.output(XSHUT_MIDDLE_PIN, GPIO.LOW)
+GPIO.output(XSHUT_RIGHT_PIN, GPIO.LOW)
+
+# Keep all low for 500 ms or so to make sure they reset
+time.sleep(0.50)
+
+# Create one object per VL53L0X passing the address to give to
+# each.
+tof_left = VL53L0X.VL53L0X(address=0x29)
+tof_middle = VL53L0X.VL53L0X(address=0x2B)
+tof_right = VL53L0X.VL53L0X(address=0x2D)
+
+# Set shutdown pin high for the first VL53L0X then
+# call to start ranging
+GPIO.output(XSHUT_LEFT_PIN, GPIO.HIGH)
+time.sleep(0.50)
+tof_left.start_ranging(VL53L0X.VL53L0X_BETTER_ACCURACY_MODE)
+
+# Set shutdown pin high for the second VL53L0X then
+# call to start ranging
+GPIO.output(XSHUT_MIDDLE_PIN, GPIO.HIGH)
+time.sleep(0.50)
+tof_middle.start_ranging(VL53L0X.VL53L0X_BETTER_ACCURACY_MODE)
+
+# Set shutdown pin high for the third VL53L0X then
+# call to start ranging
+GPIO.output(XSHUT_RIGHT_PIN, GPIO.HIGH)
+time.sleep(0.50)
+tof_right.start_ranging(VL53L0X.VL53L0X_BETTER_ACCURACY_MODE)
+
 
 ## Init Temperature+Humidity sensor
 DHT_SENSOR = DHT11(DHT_PIN)
@@ -81,9 +129,21 @@ data = {
         "CO" : ""
 }
 
+## Accelerations
+#global Ax
+#global Ay
+#global Az
+#Ax = 0
+#Ay = 0
+#Az = 0
+
+## Scooter inclination (y axis of sensor)
+#global Gy
+#Gy = 0
+
 
 # FUNCTIONS
-
+'''
 def measure_distance(trig_pin, echo_pin, location):
     # initial sleep (can result in misreads if not done)
     time.sleep(1)
@@ -111,7 +171,25 @@ def measure_distance(trig_pin, echo_pin, location):
         data[f"Distance ({location})"] = distance
 
         time.sleep(1)
+'''
+def measure_distance(location):
+    
+    if(location == "left"):
+        tof = tof_left
+    elif(location == "middle"):
+        tof = tof_middle
+    else:
+        tof = tof_right
+    
+    while(True):
+        try:
+            distance = tof.get_distance()
+            if (distance > 0):
+                print ("Distance (%s): %d mm" % (location, distance))
 
+            time.sleep(1)
+        except KeyboardInterrupt:
+            break
 
 def measure_temperature_humidity():
     while(running):
@@ -142,17 +220,17 @@ def measure_position_data():
     MPU_Init()
 
     while running:
-        #Read Accelerometer raw value
+        # Read Accelerometer raw value
         acc_x = read_raw_data(ACCEL_XOUT_H)
         acc_y = read_raw_data(ACCEL_YOUT_H)
         acc_z = read_raw_data(ACCEL_ZOUT_H)
 
-        #Read Gyroscope raw value
+        # Read Gyroscope raw value
         gyro_x = read_raw_data(GYRO_XOUT_H)
         gyro_y = read_raw_data(GYRO_YOUT_H)
         gyro_z = read_raw_data(GYRO_ZOUT_H)
 
-        #Full scale range +/- 250 degree/C as per sensitivity scale factor
+        # Full scale range +/- 250 degree/C as per sensitivity scale factor
         Ax = acc_x/16384.0
         Ay = acc_y/16384.0
         Az = acc_z/16384.0
@@ -161,8 +239,14 @@ def measure_position_data():
         Gy = gyro_y/131.0
         Gz = gyro_z/131.0
 
+        # Fall detection
+        if Ax < 1 or abs(Az) > 0.5:
+            print("FALLING")
+        if abs(Gy) > 5:
+            print("FALLING!!!")
+
         print("Gx=%.2f" %Gx, u'\u00b0'+ "/s", "\tGy=%.2f" %Gy, u'\u00b0'+ "/s", "\tGz=%.2f" %Gz, u'\u00b0'+ "/s", "\tAx=%.2f g" %Ax, "\tAy=%.2f g" %Ay, "\tAz=%.2f g" %Az)
-        sleep(1)
+        sleep(0.5)
 
 def get_coordinates():
     # Open serial port
@@ -183,14 +267,14 @@ def get_coordinates():
             print(response)
 
             # Extract data
-            data = response.split(',')
+            gps_data = response.split(',')
             try:
-                if data[1] == '1':  # Check if the GPS module has acquired a fix
-                    timestamp = data[2]
-                    latitude = data[3]
-                    longitude = data[4]
-                    speed = data[6]
-                    altitude = data[5]
+                if gps_data[1] == '1':  # Check if the GPS module has acquired a fix
+                    timestamp = gps_data[2]
+                    latitude = gps_data[3]
+                    longitude = gps_data[4]
+                    speed = gps_data[6]
+                    altitude = gps_data[5]
 
                     # Write data to CSV file
                     #writer.writerow({'Timestamp': timestamp, 'Latitude': latitude, 'Longitude': longitude, 'Speed': speed, 'Altitude': altitude})
@@ -271,35 +355,41 @@ if __name__ == '__main__':
 
     # Make the threads run
     try:
-        left_distance_thread = threading.Thread(target=measure_distance, args=(TRIG_PIN_LEFT, ECHO_PIN_LEFT, "left",))
-        middle_distance_thread = threading.Thread(target=measure_distance, args=(TRIG_PIN_MIDDLE, ECHO_PIN_MIDDLE, "middle",))
-        right_distance_thread = threading.Thread(target=measure_distance, args=(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT, "right",))
-        dht_thread = threading.Thread(target=measure_temperature_humidity)
+        #left_distance_thread = threading.Thread(target=measure_distance, args=(TRIG_PIN_LEFT, ECHO_PIN_LEFT, "left",))
+        #middle_distance_thread = threading.Thread(target=measure_distance, args=(TRIG_PIN_MIDDLE, ECHO_PIN_MIDDLE, "middle",))
+        #right_distance_thread = threading.Thread(target=measure_distance, args=(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT, "right",))
+        #left_distance_thread = threading.Thread(target=measure_distance, args=("left",))
+        #middle_distance_thread = threading.Thread(target=measure_distance, args=("middle",))
+        #right_distance_thread = threading.Thread(target=measure_distance, args=("right",))
+        #dht_thread = threading.Thread(target=measure_temperature_humidity)
         air_thread = threading.Thread(target=measure_air_quality)
-        mpu_thread = threading.Thread(target=measure_position_data)
-        gps_thread = threading.Thread(target=get_coordinates)
-        csv_thread = threading.Thread(target=write_latest_values)
-        dtn_thread = threading.Thread(target=dtn_send)
+        #mpu_thread = threading.Thread(target=measure_position_data)
+        #gps_thread = threading.Thread(target=get_coordinates)
+        #csv_thread = threading.Thread(target=write_latest_values)
+        #dtn_thread = threading.Thread(target=dtn_send)
+        #fall_thread = threading.Thread(target=fall_detection)
         
-        left_distance_thread.start()
-        middle_distance_thread.start()
-        right_distance_thread.start()
-        dht_thread.start()
+        #left_distance_thread.start()
+        #middle_distance_thread.start()
+        #right_distance_thread.start()
+        #dht_thread.start()
         air_thread.start()
-        mpu_thread.start()
-        gps_thread.start()
-        csv_thread.start()
-        dtn_thread.start()
+        #mpu_thread.start()
+        #gps_thread.start()
+        #csv_thread.start()
+        #dtn_thread.start()
+        #fall_thread.start()
         
-        left_distance_thread.join()
-        middle_distance_thread.join()
-        right_distance_thread.join()
-        dht_thread.join()
+        #left_distance_thread.join()
+        #middle_distance_thread.join()
+        #right_distance_thread.join()
+        #dht_thread.join()
         air_thread.join()
-        mpu_thread.join()
-        gps_thread.join()
-        csv_thread.join()
-        dtn_thread.join()
+        #mpu_thread.join()
+        #gps_thread.join()
+        #csv_thread.join()
+        #dtn_thread.join()
+        #fall_thread.join()
  
     # CTRL + C -> Wait for threads to finish and leave
     except KeyboardInterrupt:
@@ -307,3 +397,6 @@ if __name__ == '__main__':
         running = False
         time.sleep(5)
         GPIO.cleanup()
+        tof_left.stop_ranging()
+        tof_middle.stop_ranging()
+        tof_right.stop_ranging()
