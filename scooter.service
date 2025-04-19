@@ -1,0 +1,16 @@
+[Unit]
+Description=GMMS Mobile (Scooter) Node service
+After=network.target
+
+[Service]
+WorkingDirectory=/home/pi/scooter
+ExecStart=/bin/sh -c '/usr/bin/python3 start.py; /usr/bin/python3 main.py'
+Restart=always
+User=root
+Type=simple
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+

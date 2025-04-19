@@ -2,11 +2,12 @@
 
 ## Interfaces
 import RPi.GPIO as GPIO
-import VL53L0X
-from pigpio_dht import DHT11
-from mq import MQ
-from mpu6050 import *
 import serial
+from pigpio_dht import DHT11
+
+import lib.VL53L0X as VL53L0X
+from lib.mq import MQ
+from lib.mpu6050 import *
 
 ## Thread management
 import threading
@@ -16,16 +17,17 @@ import time
 from datetime import datetime
 import csv
 
+## Communication
+from lib.multicast import *
+
 ## HDTN execution
-import os
-import subprocess
+#import os
+#import subprocess
 
 from math import *
 
 
 # SETUP AND GLOBAL VARIABLES
-
-
 
 ## Ignore "channel already in use" warning
 GPIO.setwarnings(False)
@@ -33,32 +35,12 @@ GPIO.setwarnings(False)
 ## GPIO Mode (BOARD / BCM)
 GPIO.setmode(GPIO.BCM)
 
-'''
-## Set GPIO Pins
-TRIG_PIN_LEFT = 12
-ECHO_PIN_LEFT = 6
-
-TRIG_PIN_MIDDLE = 13
-ECHO_PIN_MIDDLE = 26
-
-TRIG_PIN_RIGHT = 25
-ECHO_PIN_RIGHT = 24
-'''
-
+## Pin setup
 DHT_PIN = 5
 XSHUT_LEFT_PIN = 17
 XSHUT_MIDDLE_PIN = 27
 XSHUT_RIGHT_PIN = 22
 
-'''
-## Set GPIO direction (IN / OUT)
-GPIO.setup(TRIG_PIN_LEFT, GPIO.OUT)
-GPIO.setup(ECHO_PIN_LEFT, GPIO.IN)
-GPIO.setup(TRIG_PIN_MIDDLE, GPIO.OUT)
-GPIO.setup(ECHO_PIN_MIDDLE, GPIO.IN)
-GPIO.setup(TRIG_PIN_RIGHT, GPIO.OUT)
-GPIO.setup(ECHO_PIN_RIGHT, GPIO.IN)
-'''
 GPIO.setup(XSHUT_LEFT_PIN, GPIO.OUT)
 GPIO.setup(XSHUT_MIDDLE_PIN, GPIO.OUT)
 GPIO.setup(XSHUT_RIGHT_PIN, GPIO.OUT)
@@ -141,37 +123,16 @@ data = {
 #global Gy
 #Gy = 0
 
+## Communication settings
+
+MCAST_GROUP_A = "239.192.0.1"   # Scooter to Intermediate Node
+MCAST_GROUP_B = "239.192.0.2"   # Intermediate Node to Scooter
+MCAST_PORT = 5000
+RECV_OUTPUT_DIR = "./"
+
 
 # FUNCTIONS
-'''
-def measure_distance(trig_pin, echo_pin, location):
-    # initial sleep (can result in misreads if not done)
-    time.sleep(1)
 
-    while(running):
-        with echo_mutex:
-            # Send a 10us pulse to trigger pin to start measurement
-            GPIO.output(trig_pin, GPIO.HIGH)
-            time.sleep(0.00001)
-            GPIO.output(trig_pin, GPIO.LOW)
-
-            # Wait for echo pin to go high and start timing
-            while GPIO.input(echo_pin) == GPIO.LOW:
-                start_time = time.time()
-
-            # Wait for echo pin to go low and stop timing
-            while GPIO.input(echo_pin) == GPIO.HIGH:
-                end_time = time.time()
-
-        # Calculate distance using speed of sound and time taken
-        duration = end_time - start_time
-        distance = duration * 17150
-
-        print("Distance (%s) = %.1f cm" % (location, distance))
-        data[f"Distance ({location})"] = distance
-
-        time.sleep(1)
-'''
 def measure_distance(location):
     
     if(location == "left"):
@@ -312,41 +273,6 @@ def write_latest_values():
             data["Timestamp"] = datetime.today().strftime("%H:%M:%S")
             write_to_file(data.values())
 
-def verify_internet_connection():
-    try:
-        subprocess.check_output(["ping", "-c", "1", "192.168.1.100"])
-        return True
-    except subprocess.CalledProcessError:
-        return False
-
-def dtn_send():
-    
-    while running:
-        
-        time.sleep(5)
-        
-        # Check internet connection with receiving node
-        if verify_internet_connection():
-            
-            dtn_transfer_start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            print(f"Internet connection available. Initiating DTN transfer at {dtn_transfer_start_time}.")
-            
-            print(f"Defined source_root: {os.getenv('HDTN_SOURCE_ROOT')}")
-            subprocess.call(["cp", csv_file, "/home/pi/HDTN/tests/test_scripts_linux/LCRD_File_Transfer_Test/sender/flightdata"])
-
-            print("Sending file over DTN")
-            os.chdir("/home/pi/HDTN/tests/test_scripts_linux/LCRD_File_Transfer_Test/sender")
-            dispatch = subprocess.run("./start_ltp_send_bpv6.sh", shell=True)
-            
-            print("DTN running...")
-
-            if dispatch.returncode == 0:
-                print("File transfer successful!")
-            else:
-                print(f"DTN transfer failed with return code {dispatch.returncode}")
-        else:
-            print("No internet connection available.")
 
 if __name__ == '__main__':
 
@@ -355,40 +281,48 @@ if __name__ == '__main__':
 
     # Make the threads run
     try:
-        #left_distance_thread = threading.Thread(target=measure_distance, args=(TRIG_PIN_LEFT, ECHO_PIN_LEFT, "left",))
-        #middle_distance_thread = threading.Thread(target=measure_distance, args=(TRIG_PIN_MIDDLE, ECHO_PIN_MIDDLE, "middle",))
-        #right_distance_thread = threading.Thread(target=measure_distance, args=(TRIG_PIN_RIGHT, ECHO_PIN_RIGHT, "right",))
         #left_distance_thread = threading.Thread(target=measure_distance, args=("left",))
         #middle_distance_thread = threading.Thread(target=measure_distance, args=("middle",))
         #right_distance_thread = threading.Thread(target=measure_distance, args=("right",))
         #dht_thread = threading.Thread(target=measure_temperature_humidity)
-        air_thread = threading.Thread(target=measure_air_quality)
+        #air_thread = threading.Thread(target=measure_air_quality)
         #mpu_thread = threading.Thread(target=measure_position_data)
         #gps_thread = threading.Thread(target=get_coordinates)
-        #csv_thread = threading.Thread(target=write_latest_values)
-        #dtn_thread = threading.Thread(target=dtn_send)
+        
+        csv_thread = threading.Thread(target=write_latest_values)
+        sending_thread = threading.Thread(target=multicast_sender, args=(csv_file, MCAST_GROUP_A, MCAST_PORT,), daemon = True)
+        receiving_thread = threading.Thread(target=multicast_receiver, args=(RECV_OUTPUT_DIR, MCAST_GROUP_B, MCAST_PORT,), daemon = True)
+
         #fall_thread = threading.Thread(target=fall_detection)
         
+
         #left_distance_thread.start()
         #middle_distance_thread.start()
         #right_distance_thread.start()
         #dht_thread.start()
-        air_thread.start()
+        #air_thread.start()
         #mpu_thread.start()
         #gps_thread.start()
-        #csv_thread.start()
-        #dtn_thread.start()
+        
+        csv_thread.start()
+        sending_thread.start()
+        receiving_thread.start()
+
         #fall_thread.start()
         
+
         #left_distance_thread.join()
         #middle_distance_thread.join()
         #right_distance_thread.join()
         #dht_thread.join()
-        air_thread.join()
+        #air_thread.join()
         #mpu_thread.join()
         #gps_thread.join()
-        #csv_thread.join()
-        #dtn_thread.join()
+
+        csv_thread.join()
+        sending_thread.join()
+        receiving_thread.join()
+
         #fall_thread.join()
  
     # CTRL + C -> Wait for threads to finish and leave

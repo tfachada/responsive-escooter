@@ -3,7 +3,7 @@
 
 import time
 import math
-from MCP3008 import MCP3008
+from lib.MCP3008 import MCP3008
 
 class MQ():
 
