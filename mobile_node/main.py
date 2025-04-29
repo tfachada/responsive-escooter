@@ -1,3 +1,5 @@
+#!venv/bin/python
+
 # LIBRARIES
 
 ## Interfaces
@@ -20,14 +22,11 @@ import csv
 ## Communication
 from lib.multicast import *
 
-## HDTN execution
-#import os
-#import subprocess
-
-from math import *
+## Values of constants (names in CAPS)
+from lib.constants import *
 
 
-# SETUP AND GLOBAL VARIABLES
+# SETUP
 
 ## Ignore "channel already in use" warning
 GPIO.setwarnings(False)
@@ -35,44 +34,34 @@ GPIO.setwarnings(False)
 ## GPIO Mode (BOARD / BCM)
 GPIO.setmode(GPIO.BCM)
 
-## Pin setup
-DHT_PIN = 5
-XSHUT_LEFT_PIN = 17
-XSHUT_MIDDLE_PIN = 27
-XSHUT_RIGHT_PIN = 22
-
 GPIO.setup(XSHUT_LEFT_PIN, GPIO.OUT)
 GPIO.setup(XSHUT_MIDDLE_PIN, GPIO.OUT)
 GPIO.setup(XSHUT_RIGHT_PIN, GPIO.OUT)
 
-# Set all shutdown pins low to turn off each VL53L0X
+## Set all shutdown pins low to turn off each VL53L0X
 GPIO.output(XSHUT_LEFT_PIN, GPIO.LOW)
 GPIO.output(XSHUT_MIDDLE_PIN, GPIO.LOW)
 GPIO.output(XSHUT_RIGHT_PIN, GPIO.LOW)
 
-# Keep all low for 500 ms or so to make sure they reset
+## Keep all low for 500 ms or so to make sure they reset
 time.sleep(0.50)
 
-# Create one object per VL53L0X passing the address to give to
-# each.
-tof_left = VL53L0X.VL53L0X(address=0x29)
-tof_middle = VL53L0X.VL53L0X(address=0x2B)
-tof_right = VL53L0X.VL53L0X(address=0x2D)
+## Create one object per VL53L0X passing the address to give to each.
+tof_left = VL53L0X.VL53L0X(address=TOF_LEFT_ADDRESS)
+tof_middle = VL53L0X.VL53L0X(address=TOF_MIDDLE_ADDRESS)
+tof_right = VL53L0X.VL53L0X(address=TOF_RIGHT_ADDRESS)
 
-# Set shutdown pin high for the first VL53L0X then
-# call to start ranging
+## Set shutdown pin high for the first VL53L0X then call to start ranging
 GPIO.output(XSHUT_LEFT_PIN, GPIO.HIGH)
 time.sleep(0.50)
 tof_left.start_ranging(VL53L0X.VL53L0X_BETTER_ACCURACY_MODE)
 
-# Set shutdown pin high for the second VL53L0X then
-# call to start ranging
+## Set shutdown pin high for the second VL53L0X then call to start ranging
 GPIO.output(XSHUT_MIDDLE_PIN, GPIO.HIGH)
 time.sleep(0.50)
 tof_middle.start_ranging(VL53L0X.VL53L0X_BETTER_ACCURACY_MODE)
 
-# Set shutdown pin high for the third VL53L0X then
-# call to start ranging
+## Set shutdown pin high for the third VL53L0X then call to start ranging
 GPIO.output(XSHUT_RIGHT_PIN, GPIO.HIGH)
 time.sleep(0.50)
 tof_right.start_ranging(VL53L0X.VL53L0X_BETTER_ACCURACY_MODE)
@@ -81,11 +70,23 @@ tof_right.start_ranging(VL53L0X.VL53L0X_BETTER_ACCURACY_MODE)
 ## Init Temperature+Humidity sensor
 DHT_SENSOR = DHT11(DHT_PIN)
 
+## Button pins
+GPIO.setup(DANGER_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(WET_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(POLLUTION_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(DRIVING_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+
+## LED pins
+GPIO.setup(DANGER_LED, GPIO.OUT)
+GPIO.setup(WET_LED, GPIO.OUT)
+GPIO.setup(POLLUTION_LED, GPIO.OUT)
+GPIO.setup(DRIVING_LED, GPIO.OUT)
+
+## Vibration motor pin
+GPIO.setup(VIBRATION_PIN, GPIO.OUT)
+
 ## State variable for threads
 running = True
-
-## Mutex for echo signal to be received
-echo_mutex = threading.Lock()
 
 ## Mutex for the CSV values to match their timestamp
 timestamp_mutex = threading.Lock()
@@ -106,10 +107,13 @@ data = {
         "Distance (right)" : "",
         "Temperature" : "",
         "Humidity" : "",
-        "Smoke" : "",
-        "LPG" : "",
-        "CO" : ""
+        "AQI" : ""
 }
+
+## Distance variables
+distance_left = 100
+distance_middle = 100
+distance_right = 100
 
 ## Accelerations
 #global Ax
@@ -123,30 +127,28 @@ data = {
 #global Gy
 #Gy = 0
 
-## Communication settings
 
-MCAST_GROUP_A = "239.192.0.1"   # Scooter to Intermediate Node
-MCAST_GROUP_B = "239.192.0.2"   # Intermediate Node to Scooter
-MCAST_PORT = 5000
-RECV_OUTPUT_DIR = "./"
+# STATUS INDICATORS
+road_danger = False
+wet_pavement = False
+high_humidity = False
+pollution = False
+dangerous_driving = False
+forbidden_zone = False
 
 
 # FUNCTIONS
 
-def measure_distance(location):
-    
-    if(location == "left"):
-        tof = tof_left
-    elif(location == "middle"):
-        tof = tof_middle
-    else:
-        tof = tof_right
-    
-    while(True):
+def measure_distance(sensor, location, distance):
+    while(running):
         try:
-            distance = tof.get_distance()
-            if (distance > 0):
-                print ("Distance (%s): %d mm" % (location, distance))
+            distance = sensor.get_distance()
+            print ("Distance (%s): %d mm" % (location, distance))
+
+            if distance < 500:
+                road_danger = True
+            else:
+                road_danger = False
 
             time.sleep(1)
         except KeyboardInterrupt:
@@ -164,16 +166,26 @@ def measure_temperature_humidity():
             data["Humidity"] = humidity
         except TimeoutError:
             pass
+
+        if True:
+            high_humidity = True
+        else:
+            high_humidity = False
+
         time.sleep(1)
 
 def measure_air_quality():
     mq = MQ()
     while(running):
-        perc = mq.MQPercentage()
-        print("Smoke: %g ppm, LPG: %g ppm, CO: %g ppm" % (perc["SMOKE"], perc["GAS_LPG"], perc["CO"]))
-        data["Smoke"] = perc["SMOKE"]
-        data["LPG"] = perc["GAS_LPG"]
-        data["CO"] = perc["CO"]
+        aqi = mq.MQPercentage()["SMOKE"]
+        print("Air Quality Index: %.1f" % aqi)
+        data["AQI"] = aqi
+
+        if True:
+            pollution = True
+        else:
+            pollution = False
+
         time.sleep(1)
 
 def measure_position_data():
@@ -205,6 +217,8 @@ def measure_position_data():
             print("FALLING")
         if abs(Gy) > 5:
             print("FALLING!!!")
+
+        # TODO: Cross-check with distances
 
         print("Gx=%.2f" %Gx, u'\u00b0'+ "/s", "\tGy=%.2f" %Gy, u'\u00b0'+ "/s", "\tGz=%.2f" %Gz, u'\u00b0'+ "/s", "\tAx=%.2f g" %Ax, "\tAy=%.2f g" %Ay, "\tAz=%.2f g" %Az)
         sleep(0.5)
@@ -249,6 +263,22 @@ def get_coordinates():
             except IndexError:
                 pass
 
+            # TODO: different variable for this one
+            if True:
+                road_danger = True
+            else:
+                road_danger = False
+
+            if True:
+                wet_pavement = True
+            else:
+                wet_pavement = False
+
+            if True:
+                forbidden_zone = True
+            else:
+                forbidden_zone = False
+
             # Wait for a few seconds before sending the next command
             time.sleep(5)
 
@@ -273,6 +303,52 @@ def write_latest_values():
             data["Timestamp"] = datetime.today().strftime("%H:%M:%S")
             write_to_file(data.values())
 
+def check_status_aux(status, led, button, button_pressed):
+
+    if status == True:
+        if button_pressed == False:
+            GPIO.output(led, GPIO.HIGH)
+        if GPIO.input(button) == GPIO.HIGH:
+            button_pressed = True
+    else:
+        GPIO.output(led, GPIO.LOW)
+        button_pressed = False
+
+
+def check_status():
+
+    danger_button_pressed = False
+    wet_button_pressed = False
+    pollution_button_pressed = False
+    driving_button_pressed = False
+
+    if forbidden_zone:
+        GPIO.output(VIBRATION_PIN, GPIO.HIGH)
+        GPIO.output(DANGER_LED, GPIO.HIGH)
+        GPIO.output(WET_LED, GPIO.HIGH)
+        GPIO.output(POLLUTION_LED, GPIO.HIGH)
+        GPIO.output(DRIVING_LED, GPIO.HIGH)
+        time.sleep(.5)
+        GPIO.output(VIBRATION_PIN, GPIO.LOW)
+        GPIO.output(DANGER_LED, GPIO.LOW)
+        GPIO.output(WET_LED, GPIO.LOW)
+        GPIO.output(POLLUTION_LED, GPIO.LOW)
+        GPIO.output(DRIVING_LED, GPIO.LOW)
+
+    else:
+        check_status_aux(road_danger, DANGER_LED, DANGER_BUTTON, danger_button_pressed)
+        check_status_aux(high_humidity, WET_LED, WET_BUTTON, wet_button_pressed)
+        check_status_aux(wet_pavement, WET_LED, WET_BUTTON, wet_button_pressed)
+        check_status_aux(pollution, POLLUTION_LED, POLLUTION_BUTTON, pollution_button_pressed)
+        check_status_aux(dangerous_driving, DRIVING_LED, DRIVING_BUTTON, driving_button_pressed)
+
+        if road_danger or high_humidity or wet_pavement or pollution or dangerous_driving:
+            GPIO.output(VIBRATION_PIN, GPIO.HIGH)
+        else:
+            GPIO.output(VIBRATION_PIN, GPIO.LOW)
+
+    time.sleep(1)
+
 
 if __name__ == '__main__':
 
@@ -281,49 +357,49 @@ if __name__ == '__main__':
 
     # Make the threads run
     try:
-        #left_distance_thread = threading.Thread(target=measure_distance, args=("left",))
-        #middle_distance_thread = threading.Thread(target=measure_distance, args=("middle",))
-        #right_distance_thread = threading.Thread(target=measure_distance, args=("right",))
-        #dht_thread = threading.Thread(target=measure_temperature_humidity)
-        #air_thread = threading.Thread(target=measure_air_quality)
+        #left_distance_thread = threading.Thread(target=measure_distance, args=(tof_left, "left", distance_left,))
+        #middle_distance_thread = threading.Thread(target=measure_distance, args=(tof_middle, "middle", distance_middle,))
+        #right_distance_thread = threading.Thread(target=measure_distance, args=(tof_right, "right", distance_right,))
         #mpu_thread = threading.Thread(target=measure_position_data)
+        dht_thread = threading.Thread(target=measure_temperature_humidity)
+        #air_thread = threading.Thread(target=measure_air_quality)
         #gps_thread = threading.Thread(target=get_coordinates)
         
-        csv_thread = threading.Thread(target=write_latest_values)
-        sending_thread = threading.Thread(target=multicast_sender, args=(csv_file, MCAST_GROUP_A, MCAST_PORT,), daemon = True)
-        receiving_thread = threading.Thread(target=multicast_receiver, args=(RECV_OUTPUT_DIR, MCAST_GROUP_B, MCAST_PORT,), daemon = True)
+        #csv_thread = threading.Thread(target=write_latest_values)
+        #sending_thread = threading.Thread(target=multicast_sender, args=(csv_file, MCAST_GROUP_A, MCAST_PORT,), daemon = True)
+        #receiving_thread = threading.Thread(target=multicast_receiver, args=(RECV_OUTPUT_DIR, MCAST_GROUP_B, MCAST_PORT,), daemon = True)
 
-        #fall_thread = threading.Thread(target=fall_detection)
+        actuation_thread = threading.Thread(target=check_status)
         
 
         #left_distance_thread.start()
         #middle_distance_thread.start()
         #right_distance_thread.start()
-        #dht_thread.start()
-        #air_thread.start()
         #mpu_thread.start()
+        dht_thread.start()
+        #air_thread.start()
         #gps_thread.start()
         
-        csv_thread.start()
-        sending_thread.start()
-        receiving_thread.start()
+        #csv_thread.start()
+        #sending_thread.start()
+        #receiving_thread.start()
 
-        #fall_thread.start()
+        actuation_thread.start()
         
 
         #left_distance_thread.join()
         #middle_distance_thread.join()
         #right_distance_thread.join()
-        #dht_thread.join()
-        #air_thread.join()
         #mpu_thread.join()
+        dht_thread.join()
+        #air_thread.join()
         #gps_thread.join()
 
-        csv_thread.join()
-        sending_thread.join()
-        receiving_thread.join()
+        #csv_thread.join()
+        #sending_thread.join()
+        #receiving_thread.join()
 
-        #fall_thread.join()
+        actuation_thread.join()
  
     # CTRL + C -> Wait for threads to finish and leave
     except KeyboardInterrupt:
