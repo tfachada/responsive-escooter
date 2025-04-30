@@ -5,12 +5,12 @@ import os
 import time
 
 
-#RECV_OUTPUT_DIR = './'
-#RECV_FILENAME = 'received_file2.txt'
+RECV_OUTPUT_DIR = "./"
+RECV_FILENAME = "ext_data.json"
 
-#MCAST_GROUP_A = '239.192.0.1'  # Scooter to Intermediate Node
-#MCAST_GROUP_B = '239.192.0.2'  # Intermediate Node to Scooter
-#MCAST_PORT = 5000
+MCAST_GROUP_A = "239.192.0.1"  # Scooter to Intermediate Node
+MCAST_GROUP_B = "239.192.0.2"  # Intermediate Node to Scooter
+MCAST_PORT = 5000
 
 CHUNK_SIZE = 1024  # bytes per packet
 

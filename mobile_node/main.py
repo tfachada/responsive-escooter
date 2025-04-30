@@ -22,6 +22,9 @@ import csv
 ## Communication
 from lib.multicast import *
 
+## Intermediate node .json data parsing
+import json
+
 ## Values of constants (names in CAPS)
 from lib.constants import *
 
@@ -129,12 +132,21 @@ distance_right = 100
 
 
 # STATUS INDICATORS
-road_danger = False
+
+## Sensed and Geofenced data
+road_danger_sensors = False
+road_danger_gps = False
 wet_pavement = False
 high_humidity = False
 pollution = False
 dangerous_driving = False
 forbidden_zone = False
+
+## Button presses
+danger_button_pressed = False
+wet_button_pressed = False
+pollution_button_pressed = False
+driving_button_pressed = False
 
 
 # FUNCTIONS
@@ -146,9 +158,9 @@ def measure_distance(sensor, location, distance):
             print ("Distance (%s): %d mm" % (location, distance))
 
             if distance < 500:
-                road_danger = True
+                road_danger_sensors = True
             else:
-                road_danger = False
+                road_danger_sensors = False
 
             time.sleep(1)
         except KeyboardInterrupt:
@@ -223,6 +235,29 @@ def measure_position_data():
         print("Gx=%.2f" %Gx, u'\u00b0'+ "/s", "\tGy=%.2f" %Gy, u'\u00b0'+ "/s", "\tGz=%.2f" %Gz, u'\u00b0'+ "/s", "\tAx=%.2f g" %Ax, "\tAy=%.2f g" %Ay, "\tAz=%.2f g" %Az)
         sleep(0.5)
 
+def get_map_values(lat, lon):
+    # Default values
+    result = {
+        "road_danger": 0,
+        "wet_pavement": 0,
+        "forbidden_zone": 0
+    }
+
+    # Read the JSON file
+    with open("ext_data.json", "r") as file:
+        data = json.load(file)
+
+    # Iterate through the data
+    for entry in data:
+        if (entry["min_lon"] <= lon <= entry["max_lon"] and
+            entry["min_lat"] <= lat <= entry["max_lat"]):
+            result["road_danger"] = entry["road_danger"]
+            result["wet_pavement"] = entry["wet_pavement"]
+            result["forbidden_zone"] = entry["forbidden_zone"]
+            break
+
+    return result
+
 def get_coordinates():
     # Open serial port
     ser = serial.Serial('/dev/ttyAMA0', baudrate=115200, timeout=1)
@@ -263,18 +298,19 @@ def get_coordinates():
             except IndexError:
                 pass
 
-            # TODO: different variable for this one
-            if True:
+            map_values = get_map_values(latitude, longitude)
+
+            if map_values["road_danger"] == 1:
                 road_danger = True
             else:
-                road_danger = False
+                road_danger_gps = False
 
-            if True:
+            if map_values["wet_pavement"] == 1:
                 wet_pavement = True
             else:
                 wet_pavement = False
 
-            if True:
+            if map_values["forbidden_zone"] == 1:
                 forbidden_zone = True
             else:
                 forbidden_zone = False
@@ -317,11 +353,6 @@ def check_status_aux(status, led, button, button_pressed):
 
 def check_status():
 
-    danger_button_pressed = False
-    wet_button_pressed = False
-    pollution_button_pressed = False
-    driving_button_pressed = False
-
     if forbidden_zone:
         GPIO.output(VIBRATION_PIN, GPIO.HIGH)
         GPIO.output(DANGER_LED, GPIO.HIGH)
@@ -336,13 +367,14 @@ def check_status():
         GPIO.output(DRIVING_LED, GPIO.LOW)
 
     else:
-        check_status_aux(road_danger, DANGER_LED, DANGER_BUTTON, danger_button_pressed)
+        check_status_aux(road_danger_sensors, DANGER_LED, DANGER_BUTTON, danger_button_pressed)
+        check_status_aux(road_danger_gps, DANGER_LED, DANGER_BUTTON, danger_button_pressed)
         check_status_aux(high_humidity, WET_LED, WET_BUTTON, wet_button_pressed)
         check_status_aux(wet_pavement, WET_LED, WET_BUTTON, wet_button_pressed)
         check_status_aux(pollution, POLLUTION_LED, POLLUTION_BUTTON, pollution_button_pressed)
         check_status_aux(dangerous_driving, DRIVING_LED, DRIVING_BUTTON, driving_button_pressed)
 
-        if road_danger or high_humidity or wet_pavement or pollution or dangerous_driving:
+        if road_danger_sensors or road_danger_gps or high_humidity or wet_pavement or pollution or dangerous_driving:
             GPIO.output(VIBRATION_PIN, GPIO.HIGH)
         else:
             GPIO.output(VIBRATION_PIN, GPIO.LOW)
@@ -360,8 +392,8 @@ if __name__ == '__main__':
         #left_distance_thread = threading.Thread(target=measure_distance, args=(tof_left, "left", distance_left,))
         #middle_distance_thread = threading.Thread(target=measure_distance, args=(tof_middle, "middle", distance_middle,))
         #right_distance_thread = threading.Thread(target=measure_distance, args=(tof_right, "right", distance_right,))
-        #mpu_thread = threading.Thread(target=measure_position_data)
-        dht_thread = threading.Thread(target=measure_temperature_humidity)
+        mpu_thread = threading.Thread(target=measure_position_data)
+        #dht_thread = threading.Thread(target=measure_temperature_humidity)
         #air_thread = threading.Thread(target=measure_air_quality)
         #gps_thread = threading.Thread(target=get_coordinates)
         
@@ -369,14 +401,14 @@ if __name__ == '__main__':
         #sending_thread = threading.Thread(target=multicast_sender, args=(csv_file, MCAST_GROUP_A, MCAST_PORT,), daemon = True)
         #receiving_thread = threading.Thread(target=multicast_receiver, args=(RECV_OUTPUT_DIR, MCAST_GROUP_B, MCAST_PORT,), daemon = True)
 
-        actuation_thread = threading.Thread(target=check_status)
+        #actuation_thread = threading.Thread(target=check_status)
         
 
         #left_distance_thread.start()
         #middle_distance_thread.start()
         #right_distance_thread.start()
-        #mpu_thread.start()
-        dht_thread.start()
+        mpu_thread.start()
+        #dht_thread.start()
         #air_thread.start()
         #gps_thread.start()
         
@@ -384,14 +416,14 @@ if __name__ == '__main__':
         #sending_thread.start()
         #receiving_thread.start()
 
-        actuation_thread.start()
+        #actuation_thread.start()
         
 
         #left_distance_thread.join()
         #middle_distance_thread.join()
         #right_distance_thread.join()
-        #mpu_thread.join()
-        dht_thread.join()
+        mpu_thread.join()
+        #dht_thread.join()
         #air_thread.join()
         #gps_thread.join()
 
@@ -399,7 +431,7 @@ if __name__ == '__main__':
         #sending_thread.join()
         #receiving_thread.join()
 
-        actuation_thread.join()
+        #actuation_thread.join()
  
     # CTRL + C -> Wait for threads to finish and leave
     except KeyboardInterrupt:

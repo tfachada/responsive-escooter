@@ -25,9 +25,3 @@ XSHUT_RIGHT_PIN = 22
 TOF_LEFT_ADDRESS = 0x29
 TOF_MIDDLE_ADDRESS = 0x2B
 TOF_RIGHT_ADDRESS = 0x2D
-
-# Communication settings
-MCAST_GROUP_A = "239.192.0.1"   # Scooter to Intermediate Node
-MCAST_GROUP_B = "239.192.0.2"   # Intermediate Node to Scooter
-MCAST_PORT = 5000
-RECV_OUTPUT_DIR = "./"
