@@ -33,7 +33,7 @@ from lib.constants import *
 
 ## Ignore "channel already in use" warning
 GPIO.setwarnings(False)
- 
+
 ## GPIO Mode (BOARD / BCM)
 GPIO.setmode(GPIO.BCM)
 
@@ -190,7 +190,7 @@ def measure_air_quality():
     mq = MQ()
     while(running):
         aqi = mq.MQPercentage()["SMOKE"]
-        print("Air Quality Index: %.1f" % aqi)
+        print("Air Quality Index: %.3f" % aqi)
         data["AQI"] = aqi
 
         if True:
@@ -201,7 +201,7 @@ def measure_air_quality():
         time.sleep(1)
 
 def measure_position_data():
-    
+
     MPU_Init()
 
     while running:
@@ -289,7 +289,7 @@ def get_coordinates():
                     # Write data to CSV file
                     #writer.writerow({'Timestamp': timestamp, 'Latitude': latitude, 'Longitude': longitude, 'Speed': speed, 'Altitude': altitude})
                     #csvfile.flush()
-                    
+
                     print(f"Timestamp: {timestamp}, Latitude: {latitude}, Longitude: {longitude}, Altitude: {altitude}, Speed: {speed}")
                     data["Latitude"] = latitude
                     data["Longitude"] = longitude
@@ -396,13 +396,13 @@ if __name__ == '__main__':
         #dht_thread = threading.Thread(target=measure_temperature_humidity)
         #air_thread = threading.Thread(target=measure_air_quality)
         #gps_thread = threading.Thread(target=get_coordinates)
-        
+
         #csv_thread = threading.Thread(target=write_latest_values)
         #sending_thread = threading.Thread(target=multicast_sender, args=(csv_file, MCAST_GROUP_A, MCAST_PORT,), daemon = True)
         #receiving_thread = threading.Thread(target=multicast_receiver, args=(RECV_OUTPUT_DIR, MCAST_GROUP_B, MCAST_PORT,), daemon = True)
 
         #actuation_thread = threading.Thread(target=check_status)
-        
+
 
         #left_distance_thread.start()
         #middle_distance_thread.start()
@@ -411,13 +411,13 @@ if __name__ == '__main__':
         #dht_thread.start()
         #air_thread.start()
         #gps_thread.start()
-        
+
         #csv_thread.start()
         #sending_thread.start()
         #receiving_thread.start()
 
         #actuation_thread.start()
-        
+
 
         #left_distance_thread.join()
         #middle_distance_thread.join()
@@ -432,7 +432,7 @@ if __name__ == '__main__':
         #receiving_thread.join()
 
         #actuation_thread.join()
- 
+
     # CTRL + C -> Wait for threads to finish and leave
     except KeyboardInterrupt:
         print("\nMeasurement stopped by user. Waiting for threads to finish...")
