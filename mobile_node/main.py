@@ -28,12 +28,21 @@ import json
 ## Values of constants (names in CAPS)
 from lib.constants import *
 
+## Nominatim mode (set by optional argument)
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument("--nominatim", action="store_true")
+args = parser.parse_args()
+if args.nominatim:
+    from geopy.geocoders import Nominatim
+    from functools import partial
+
 
 # SETUP
 
 ## Ignore "channel already in use" warning
 GPIO.setwarnings(False)
-
+ 
 ## GPIO Mode (BOARD / BCM)
 GPIO.setmode(GPIO.BCM)
 
@@ -130,6 +139,9 @@ distance_right = 100
 #global Gy
 #Gy = 0
 
+## Coordinates (used by the geofencing threads)
+latitude = -1
+longitude = -1
 
 # STATUS INDICATORS
 
@@ -141,6 +153,7 @@ high_humidity = False
 pollution = False
 dangerous_driving = False
 forbidden_zone = False
+forbidden_zone_nominatim = False
 
 ## Button presses
 danger_button_pressed = False
@@ -190,7 +203,7 @@ def measure_air_quality():
     mq = MQ()
     while(running):
         aqi = mq.MQPercentage()["SMOKE"]
-        print("Air Quality Index: %.3f" % aqi)
+        print("Air Quality Index: %f" % aqi)
         data["AQI"] = aqi
 
         if True:
@@ -201,7 +214,7 @@ def measure_air_quality():
         time.sleep(1)
 
 def measure_position_data():
-
+    
     MPU_Init()
 
     while running:
@@ -235,29 +248,6 @@ def measure_position_data():
         print("Gx=%.2f" %Gx, u'\u00b0'+ "/s", "\tGy=%.2f" %Gy, u'\u00b0'+ "/s", "\tGz=%.2f" %Gz, u'\u00b0'+ "/s", "\tAx=%.2f g" %Ax, "\tAy=%.2f g" %Ay, "\tAz=%.2f g" %Az)
         sleep(0.5)
 
-def get_map_values(lat, lon):
-    # Default values
-    result = {
-        "road_danger": 0,
-        "wet_pavement": 0,
-        "forbidden_zone": 0
-    }
-
-    # Read the JSON file
-    with open("ext_data.json", "r") as file:
-        data = json.load(file)
-
-    # Iterate through the data
-    for entry in data:
-        if (entry["min_lon"] <= lon <= entry["max_lon"] and
-            entry["min_lat"] <= lat <= entry["max_lat"]):
-            result["road_danger"] = entry["road_danger"]
-            result["wet_pavement"] = entry["wet_pavement"]
-            result["forbidden_zone"] = entry["forbidden_zone"]
-            break
-
-    return result
-
 def get_coordinates():
     # Open serial port
     ser = serial.Serial('/dev/ttyAMA0', baudrate=115200, timeout=1)
@@ -289,7 +279,7 @@ def get_coordinates():
                     # Write data to CSV file
                     #writer.writerow({'Timestamp': timestamp, 'Latitude': latitude, 'Longitude': longitude, 'Speed': speed, 'Altitude': altitude})
                     #csvfile.flush()
-
+                    
                     print(f"Timestamp: {timestamp}, Latitude: {latitude}, Longitude: {longitude}, Altitude: {altitude}, Speed: {speed}")
                     data["Latitude"] = latitude
                     data["Longitude"] = longitude
@@ -297,23 +287,6 @@ def get_coordinates():
                     data["Speed"] = speed
             except IndexError:
                 pass
-
-            map_values = get_map_values(latitude, longitude)
-
-            if map_values["road_danger"] == 1:
-                road_danger = True
-            else:
-                road_danger_gps = False
-
-            if map_values["wet_pavement"] == 1:
-                wet_pavement = True
-            else:
-                wet_pavement = False
-
-            if map_values["forbidden_zone"] == 1:
-                forbidden_zone = True
-            else:
-                forbidden_zone = False
 
             # Wait for a few seconds before sending the next command
             time.sleep(5)
@@ -325,6 +298,68 @@ def get_coordinates():
 
         # Close serial port
         ser.close()
+
+def check_map_data():
+
+    while(running):
+
+        # Default values
+        map_values = {
+            "road_danger": 0,
+            "wet_pavement": 0,
+            "forbidden_zone": 0
+        }
+
+        # Read the JSON file
+        with open("ext_data.json", "r") as file:
+            data = json.load(file)
+
+        # Iterate through the data
+        for entry in data:
+            if (entry["min_lon"] <= longitude <= entry["max_lon"] and
+                entry["min_lat"] <= latitude <= entry["max_lat"]):
+                map_values["road_danger"] = entry["road_danger"]
+                map_values["wet_pavement"] = entry["wet_pavement"]
+                map_values["forbidden_zone"] = entry["forbidden_zone"]
+                break
+        
+        if map_values["road_danger"] == 1:
+            road_danger = True
+        else:
+            road_danger_gps = False
+
+        if map_values["wet_pavement"] == 1:
+            wet_pavement = True
+        else:
+            wet_pavement = False
+
+        if map_values["forbidden_zone"] == 1:
+            forbidden_zone = True
+        else:
+            forbidden_zone = False
+
+        time.sleep(5)
+
+def check_map_data_nominatim():
+
+    while(running):
+
+        try:
+            geolocator = Nominatim(domain="localhost:8080", scheme="http", user_agent="GMMS_scooter")
+            reverse = partial(geolocator.reverse, language="en")
+
+            try:
+                place_type = reverse("%f, %f" % (latitude, longitude)).raw["class"]
+            except AttributeError:
+                print("Error. Invalid coordinates.")
+
+            if place_type == "amenity":
+                forbidden_zone_nominatim = True
+            else:
+                forbidden_zone_nominatim = False
+
+        except ConnectionRefusedError:
+            print("Error. If running with --nominatim, please turn on Nominatim, and wait for its initialization.")
 
 def write_to_file(row_of_values):
     with open(csv_file, mode='a', newline='') as file:
@@ -353,7 +388,7 @@ def check_status_aux(status, led, button, button_pressed):
 
 def check_status():
 
-    if forbidden_zone:
+    if forbidden_zone or forbidden_zone_nominatim:
         GPIO.output(VIBRATION_PIN, GPIO.HIGH)
         GPIO.output(DANGER_LED, GPIO.HIGH)
         GPIO.output(WET_LED, GPIO.HIGH)
@@ -392,47 +427,59 @@ if __name__ == '__main__':
         #left_distance_thread = threading.Thread(target=measure_distance, args=(tof_left, "left", distance_left,))
         #middle_distance_thread = threading.Thread(target=measure_distance, args=(tof_middle, "middle", distance_middle,))
         #right_distance_thread = threading.Thread(target=measure_distance, args=(tof_right, "right", distance_right,))
-        mpu_thread = threading.Thread(target=measure_position_data)
+        #mpu_thread = threading.Thread(target=measure_position_data)
         #dht_thread = threading.Thread(target=measure_temperature_humidity)
-        #air_thread = threading.Thread(target=measure_air_quality)
+        air_thread = threading.Thread(target=measure_air_quality)
         #gps_thread = threading.Thread(target=get_coordinates)
 
+        map_json_thread = threading.Thread(target=check_map_data)
+        
         #csv_thread = threading.Thread(target=write_latest_values)
         #sending_thread = threading.Thread(target=multicast_sender, args=(csv_file, MCAST_GROUP_A, MCAST_PORT,), daemon = True)
         #receiving_thread = threading.Thread(target=multicast_receiver, args=(RECV_OUTPUT_DIR, MCAST_GROUP_B, MCAST_PORT,), daemon = True)
 
-        #actuation_thread = threading.Thread(target=check_status)
-
+        actuation_thread = threading.Thread(target=check_status)
+        
 
         #left_distance_thread.start()
         #middle_distance_thread.start()
         #right_distance_thread.start()
-        mpu_thread.start()
+        #mpu_thread.start()
         #dht_thread.start()
-        #air_thread.start()
+        air_thread.start()
         #gps_thread.start()
 
+        map_json_thread.start()
+        
         #csv_thread.start()
         #sending_thread.start()
         #receiving_thread.start()
 
-        #actuation_thread.start()
-
+        actuation_thread.start()
+        
 
         #left_distance_thread.join()
         #middle_distance_thread.join()
         #right_distance_thread.join()
-        mpu_thread.join()
+        #mpu_thread.join()
         #dht_thread.join()
-        #air_thread.join()
+        air_thread.join()
         #gps_thread.join()
+
+        map_json_thread.join()
 
         #csv_thread.join()
         #sending_thread.join()
         #receiving_thread.join()
 
-        #actuation_thread.join()
+        actuation_thread.join()
 
+
+        if args.nominatim:
+            map_db_thread = threading.Thread(target=check_map_data_nominatim)
+            map_db_thread.start()
+            map_db_thread.join()
+ 
     # CTRL + C -> Wait for threads to finish and leave
     except KeyboardInterrupt:
         print("\nMeasurement stopped by user. Waiting for threads to finish...")
