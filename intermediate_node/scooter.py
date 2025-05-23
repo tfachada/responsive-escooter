@@ -5,9 +5,9 @@ import os
 import threading
 import time
 
-SEND_FILE = "ext_data.txt"
+SEND_FILE = "server_data.json"
 
-RECV_OUTPUT_DIR = './'
+DATA_DIR = 'scooter_data'
 
 MCAST_GROUP_A = "239.192.0.1"  # Scooter to Intermediate Node
 MCAST_GROUP_B = "239.192.0.2"  # Intermediate Node to Scooter

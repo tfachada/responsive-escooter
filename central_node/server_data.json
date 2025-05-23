@@ -9,13 +9,13 @@
         "forbidden_zone": 1
     },
     {
-        "min_lon": -9.32,
-        "min_lat": 38.72,
-        "max_lon": -9.31,
-        "max_lat": 38.73,
+        "min_lon": -9.4,
+        "min_lat": 38.7,
+        "max_lon": -9.3,
+        "max_lat": 38.8,
         "road_danger": 0,
-        "wet_pavement": 1,
-        "forbidden_zone": 0
+        "wet_pavement": 0,
+        "forbidden_zone": 1
     }
 ]
 

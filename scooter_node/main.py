@@ -84,13 +84,13 @@ DHT_SENSOR = DHT11(DHT_PIN)
 
 ## Button pins
 GPIO.setup(DANGER_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-GPIO.setup(WET_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(WEATHER_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 GPIO.setup(POLLUTION_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-GPIO.setup(DRIVING_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(NORIDE_REPORT_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
 ## LED pins
 GPIO.setup(DANGER_LED, GPIO.OUT)
-GPIO.setup(WET_LED, GPIO.OUT)
+GPIO.setup(WEATHER_LED, GPIO.OUT)
 GPIO.setup(POLLUTION_LED, GPIO.OUT)
 GPIO.setup(DRIVING_LED, GPIO.OUT)
 
@@ -108,78 +108,100 @@ csv_file = datetime.today().strftime("%Y%m%d_%H%M%S") + ".csv"
 
 ## Values to be sent
 data = {
-        "Date" : "",
-        "Timestamp" : "",
-        "Latitude" : "",
-        "Longitude" : "",
-        "Altitude" : "",
-        "Speed" : "",
-        "Distance (left)" : "",
-        "Distance (middle)" : "",
-        "Distance (right)" : "",
-        "Temperature" : "",
-        "Humidity" : "",
-        "AQI" : ""
+    "Date" : "",
+    "Timestamp" : "",
+    "Latitude" : "",
+    "Longitude" : "",
+    "Altitude" : "",
+    "Speed" : "",
+    "Distance (left)" : "",
+    "Distance (middle)" : "",
+    "Distance (right)" : "",
+    "Temperature" : "",
+    "Humidity" : "",
+    "AQI" : "",
+    "No-ride report" : "",
+    "Danger report" : "",
+    "Weather report" : "",
+    "Pollution report" : ""
 }
 
 ## Distance variables
-distance_left = 100
-distance_middle = 100
-distance_right = 100
-
-## Accelerations
-#global Ax
-#global Ay
-#global Az
-#Ax = 0
-#Ay = 0
-#Az = 0
-
-## Scooter inclination (y axis of sensor)
-#global Gy
-#Gy = 0
+distance_left = 10000
+distance_middle = 10000
+distance_right = 10000
 
 ## Coordinates (used by the geofencing threads)
 latitude = -1
 longitude = -1
 
+
 # STATUS INDICATORS
 
-## Sensed and Geofenced data
-road_danger_sensors = False
-road_danger_gps = False
-wet_pavement = False
-high_humidity = False
-pollution = False
+## Sensed and geofenced data
+
 dangerous_driving = False
+
+road_danger_left = False
+road_danger_middle = False
+road_danger_right = False
+road_danger_acceleration = False
+road_danger_gps = False
+
+unfavorable_weather_sensors = False
+wet_pavement = False
+
+pollution = False
+
 forbidden_zone = False
 forbidden_zone_nominatim = False
 
 ## Button presses
 danger_button_pressed = False
-wet_button_pressed = False
+weather_button_pressed = False
 pollution_button_pressed = False
-driving_button_pressed = False
+noride_report_button_button_pressed = False
 
 
 # FUNCTIONS
 
 def measure_distance(sensor, location, distance):
+    
+    global road_danger_left
+    global road_danger_middle
+    global road_danger_right
+    
     while(running):
         try:
             distance = sensor.get_distance()
             print ("Distance (%s): %d mm" % (location, distance))
 
-            if distance < 500:
-                road_danger_sensors = True
+            if sensor == tof_left:
+                if distance < 500:
+                    road_danger_left = True
+                else:
+                    road_danger_left = False
+                
+            else if sensor == tof_middle:
+                if distance < 500:
+                    road_danger_middle = True
+                else:
+                    road_danger_middle = False
+            
             else:
-                road_danger_sensors = False
+                if distance < 500:
+                    road_danger_right = True
+                else:
+                    road_danger_right = False
 
             time.sleep(1)
         except KeyboardInterrupt:
             break
 
 def measure_temperature_humidity():
+    
+    global unfavorable_weather_sensors
+    
     while(running):
         try:
             result = DHT_SENSOR.read()
@@ -192,21 +214,25 @@ def measure_temperature_humidity():
         except TimeoutError:
             pass
 
-        if True:
-            high_humidity = True
+        if humidity > 60 or temperature > 30:
+            unfavorable_weather_sensors = True
         else:
-            high_humidity = False
+            unfavorable_weather_sensors = False
 
         time.sleep(1)
 
 def measure_air_quality():
+    
+    global pollution
+    
     mq = MQ()
+    
     while(running):
         aqi = mq.MQPercentage()["SMOKE"]
         print("Air Quality Index: %f" % aqi)
         data["AQI"] = aqi
 
-        if True:
+        if aqi > 0.1:
             pollution = True
         else:
             pollution = False
@@ -214,6 +240,9 @@ def measure_air_quality():
         time.sleep(1)
 
 def measure_position_data():
+    
+    global dangerous_driving
+    global road_danger_acceleration
     
     MPU_Init()
 
@@ -236,19 +265,27 @@ def measure_position_data():
         Gx = gyro_x/131.0
         Gy = gyro_y/131.0
         Gz = gyro_z/131.0
-
+        
         # Fall detection
-        if Ax < 1 or abs(Az) > 0.5:
-            print("FALLING")
         if abs(Gy) > 5:
-            print("FALLING!!!")
+            dangerous_driving = True
+        else:
+            dangerous_driving = False
 
-        # TODO: Cross-check with distances
+        # Road danger based on linear acceleration (untested)
+        if Ax < 1 or abs(Az) > 0.5:
+            road_danger_acceleration = True
+        else:
+            road_danger_acceleration = False
 
         print("Gx=%.2f" %Gx, u'\u00b0'+ "/s", "\tGy=%.2f" %Gy, u'\u00b0'+ "/s", "\tGz=%.2f" %Gz, u'\u00b0'+ "/s", "\tAx=%.2f g" %Ax, "\tAy=%.2f g" %Ay, "\tAz=%.2f g" %Az)
         sleep(0.5)
 
 def get_coordinates():
+
+    global latitude
+    global longitude
+
     # Open serial port
     ser = serial.Serial('/dev/ttyAMA0', baudrate=115200, timeout=1)
 
@@ -275,10 +312,6 @@ def get_coordinates():
                     longitude = gps_data[4]
                     speed = gps_data[6]
                     altitude = gps_data[5]
-
-                    # Write data to CSV file
-                    #writer.writerow({'Timestamp': timestamp, 'Latitude': latitude, 'Longitude': longitude, 'Speed': speed, 'Altitude': altitude})
-                    #csvfile.flush()
                     
                     print(f"Timestamp: {timestamp}, Latitude: {latitude}, Longitude: {longitude}, Altitude: {altitude}, Speed: {speed}")
                     data["Latitude"] = latitude
@@ -301,6 +334,11 @@ def get_coordinates():
 
 def check_map_data():
 
+    global road_danger
+    global road_danger_gps
+    global wet_pavement
+    global forbidden_zone
+
     while(running):
 
         # Default values
@@ -311,17 +349,20 @@ def check_map_data():
         }
 
         # Read the JSON file
-        with open("ext_data.json", "r") as file:
+        with open("server_data.json", "r") as file:
             data = json.load(file)
 
         # Iterate through the data
         for entry in data:
-            if (entry["min_lon"] <= longitude <= entry["max_lon"] and
-                entry["min_lat"] <= latitude <= entry["max_lat"]):
+            print("Checking...")
+            if (entry["min_lon"] <= float(longitude) <= entry["max_lon"] and
+                entry["min_lat"] <= float(latitude) <= entry["max_lat"]):
                 map_values["road_danger"] = entry["road_danger"]
                 map_values["wet_pavement"] = entry["wet_pavement"]
                 map_values["forbidden_zone"] = entry["forbidden_zone"]
                 break
+            else:
+                print("Not found for %f, %f" % (latitude, longitude))
         
         if map_values["road_danger"] == 1:
             road_danger = True
@@ -341,6 +382,8 @@ def check_map_data():
         time.sleep(5)
 
 def check_map_data_nominatim():
+
+    global forbidden_zone_nominatim
 
     while(running):
 
@@ -374,47 +417,79 @@ def write_latest_values():
             data["Timestamp"] = datetime.today().strftime("%H:%M:%S")
             write_to_file(data.values())
 
+# Checks if a special status needs to be triggered, and turns off LED if user pressed button to dismiss. Called by check_status.
 def check_status_aux(status, led, button, button_pressed):
 
     if status == True:
         if button_pressed == False:
             GPIO.output(led, GPIO.HIGH)
+            print("Special status detected. Warning user...")
         if GPIO.input(button) == GPIO.HIGH:
-            button_pressed = True
+            return True
     else:
         GPIO.output(led, GPIO.LOW)
-        button_pressed = False
+        return False
 
 
 def check_status():
+    
+    while(running):
 
-    if forbidden_zone or forbidden_zone_nominatim:
-        GPIO.output(VIBRATION_PIN, GPIO.HIGH)
-        GPIO.output(DANGER_LED, GPIO.HIGH)
-        GPIO.output(WET_LED, GPIO.HIGH)
-        GPIO.output(POLLUTION_LED, GPIO.HIGH)
-        GPIO.output(DRIVING_LED, GPIO.HIGH)
-        time.sleep(.5)
-        GPIO.output(VIBRATION_PIN, GPIO.LOW)
-        GPIO.output(DANGER_LED, GPIO.LOW)
-        GPIO.output(WET_LED, GPIO.LOW)
-        GPIO.output(POLLUTION_LED, GPIO.LOW)
-        GPIO.output(DRIVING_LED, GPIO.LOW)
-
-    else:
-        check_status_aux(road_danger_sensors, DANGER_LED, DANGER_BUTTON, danger_button_pressed)
-        check_status_aux(road_danger_gps, DANGER_LED, DANGER_BUTTON, danger_button_pressed)
-        check_status_aux(high_humidity, WET_LED, WET_BUTTON, wet_button_pressed)
-        check_status_aux(wet_pavement, WET_LED, WET_BUTTON, wet_button_pressed)
-        check_status_aux(pollution, POLLUTION_LED, POLLUTION_BUTTON, pollution_button_pressed)
-        check_status_aux(dangerous_driving, DRIVING_LED, DRIVING_BUTTON, driving_button_pressed)
-
-        if road_danger_sensors or road_danger_gps or high_humidity or wet_pavement or pollution or dangerous_driving:
+        # Flash periodically if the user cannot ride there. Cannot be dismissed.
+        if forbidden_zone or forbidden_zone_nominatim:
+            print("Forbidden zone!")
             GPIO.output(VIBRATION_PIN, GPIO.HIGH)
-        else:
+            GPIO.output(DANGER_LED, GPIO.HIGH)
+            GPIO.output(WEATHER_LED, GPIO.HIGH)
+            GPIO.output(POLLUTION_LED, GPIO.HIGH)
+            GPIO.output(DRIVING_LED, GPIO.HIGH)
+            time.sleep(.5)
             GPIO.output(VIBRATION_PIN, GPIO.LOW)
+            GPIO.output(DANGER_LED, GPIO.LOW)
+            GPIO.output(WEATHER_LED, GPIO.LOW)
+            GPIO.output(POLLUTION_LED, GPIO.LOW)
+            GPIO.output(DRIVING_LED, GPIO.LOW)
 
-    time.sleep(1)
+        else:
+            # Aglomerate equivalent cases (different sensors, use of GPS...)
+            road_danger = road_danger_left or road_danger_middle or road_danger_right or road_danger_acceleration or road_danger_gps
+            unfavorable_weather = unfavorable_weather_sensors or wet_pavement
+            
+            # Check LED/Button status (dangerous driving only has a LED)
+            check_status_aux(dangerous_driving, DRIVING_LED, False, False)
+            danger_button_pressed = check_status_aux(road_danger, DANGER_LED, DANGER_BUTTON, danger_button_pressed)
+            weather_button_pressed = check_status_aux(unfavorable_weather, WEATHER_LED, WEATHER_BUTTON, weather_button_pressed)
+            pollution_button_pressed = check_status_aux(pollution, POLLUTION_LED, POLLUTION_BUTTON, pollution_button_pressed)
+
+            # Vibrate for any special status
+            if dangerous_driving or road_danger or unfavorable_weather or pollution:
+                GPIO.output(VIBRATION_PIN, GPIO.HIGH)
+            else:
+                GPIO.output(VIBRATION_PIN, GPIO.LOW)
+                
+            # Ability to report any non-detected status (except dangerous driving) with a button
+            
+            if GPIO.input(NORIDE_REPORT_BUTTON) == GPIO.HIGH:
+                data["No-ride report"] = True
+            else:
+                data["No-ride report"] = False
+            
+            if GPIO.input(DANGER_BUTTON) == GPIO.HIGH and not danger_button_pressed:
+                data["Danger report"] = True
+            else:
+                data["Danger report"] = False
+            
+            if GPIO.input(WEATHER_BUTTON) == GPIO.HIGH and not weather_button_pressed:
+                data["Weather report"] = True
+            else:
+                data["Weather report"] = False
+            
+            if GPIO.input(POLLUTION_BUTTON) == GPIO.HIGH and not pollution_button_pressed:
+                data["Pollution report"] = True
+            else:
+                data["Pollution report"] = False
+
+        time.sleep(1)
 
 
 if __name__ == '__main__':
@@ -424,53 +499,53 @@ if __name__ == '__main__':
 
     # Make the threads run
     try:
-        #left_distance_thread = threading.Thread(target=measure_distance, args=(tof_left, "left", distance_left,))
-        #middle_distance_thread = threading.Thread(target=measure_distance, args=(tof_middle, "middle", distance_middle,))
-        #right_distance_thread = threading.Thread(target=measure_distance, args=(tof_right, "right", distance_right,))
-        #mpu_thread = threading.Thread(target=measure_position_data)
-        #dht_thread = threading.Thread(target=measure_temperature_humidity)
+        left_distance_thread = threading.Thread(target=measure_distance, args=(tof_left, "left", distance_left,))
+        middle_distance_thread = threading.Thread(target=measure_distance, args=(tof_middle, "middle", distance_middle,))
+        right_distance_thread = threading.Thread(target=measure_distance, args=(tof_right, "right", distance_right,))
+        mpu_thread = threading.Thread(target=measure_position_data)
+        dht_thread = threading.Thread(target=measure_temperature_humidity)
         air_thread = threading.Thread(target=measure_air_quality)
-        #gps_thread = threading.Thread(target=get_coordinates)
+        gps_thread = threading.Thread(target=get_coordinates)
 
         map_json_thread = threading.Thread(target=check_map_data)
         
-        #csv_thread = threading.Thread(target=write_latest_values)
-        #sending_thread = threading.Thread(target=multicast_sender, args=(csv_file, MCAST_GROUP_A, MCAST_PORT,), daemon = True)
-        #receiving_thread = threading.Thread(target=multicast_receiver, args=(RECV_OUTPUT_DIR, MCAST_GROUP_B, MCAST_PORT,), daemon = True)
+        csv_thread = threading.Thread(target=write_latest_values)
+        sending_thread = threading.Thread(target=multicast_sender, args=(csv_file, MCAST_GROUP_A, MCAST_PORT,), daemon = True)
+        receiving_thread = threading.Thread(target=multicast_receiver, args=(RECV_OUTPUT_DIR, MCAST_GROUP_B, MCAST_PORT,), daemon = True)
 
         actuation_thread = threading.Thread(target=check_status)
         
 
-        #left_distance_thread.start()
-        #middle_distance_thread.start()
-        #right_distance_thread.start()
-        #mpu_thread.start()
-        #dht_thread.start()
+        left_distance_thread.start()
+        middle_distance_thread.start()
+        right_distance_thread.start()
+        mpu_thread.start()
+        dht_thread.start()
         air_thread.start()
-        #gps_thread.start()
+        gps_thread.start()
 
         map_json_thread.start()
         
-        #csv_thread.start()
-        #sending_thread.start()
-        #receiving_thread.start()
+        csv_thread.start()
+        sending_thread.start()
+        receiving_thread.start()
 
         actuation_thread.start()
         
 
-        #left_distance_thread.join()
-        #middle_distance_thread.join()
-        #right_distance_thread.join()
-        #mpu_thread.join()
-        #dht_thread.join()
+        left_distance_thread.join()
+        middle_distance_thread.join()
+        right_distance_thread.join()
+        mpu_thread.join()
+        dht_thread.join()
         air_thread.join()
-        #gps_thread.join()
+        gps_thread.join()
 
         map_json_thread.join()
 
-        #csv_thread.join()
-        #sending_thread.join()
-        #receiving_thread.join()
+        csv_thread.join()
+        sending_thread.join()
+        receiving_thread.join()
 
         actuation_thread.join()
 
