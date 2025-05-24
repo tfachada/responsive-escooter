@@ -82,6 +82,19 @@ tof_right.start_ranging(VL53L0X.VL53L0X_BETTER_ACCURACY_MODE)
 ## Init Temperature+Humidity sensor
 DHT_SENSOR = DHT11(DHT_PIN)
 
+## Init Air Quality sensor
+try:
+    mq = MQ()
+except ZeroDivisionError:
+    pass
+
+## Init Accelerometer
+try:
+    MPU_Init()
+except OSError:
+    pass
+
+
 ## Button pins
 GPIO.setup(DANGER_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 GPIO.setup(WEATHER_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
@@ -226,8 +239,6 @@ def measure_air_quality():
 
     global pollution
 
-    mq = MQ()
-
     while(running):
         aqi = mq.MQPercentage()["SMOKE"]
         print("Air Quality Index: %f" % aqi)
@@ -244,8 +255,6 @@ def measure_position_data():
 
     global dangerous_driving
     global road_danger_acceleration
-
-    MPU_Init()
 
     while running:
         # Read Accelerometer raw value
@@ -272,12 +281,6 @@ def measure_position_data():
             dangerous_driving = True
         else:
             dangerous_driving = False
-
-        # Road danger based on linear acceleration (untested)
-        if Ax < 1 or abs(Az) > 0.5:
-            road_danger_acceleration = True
-        else:
-            road_danger_acceleration = False
 
         print("Gx=%.2f" %Gx, u'\u00b0'+ "/s", "\tGy=%.2f" %Gy, u'\u00b0'+ "/s", "\tGz=%.2f" %Gz, u'\u00b0'+ "/s", "\tAx=%.2f g" %Ax, "\tAy=%.2f g" %Ay, "\tAz=%.2f g" %Az)
         sleep(0.5)
@@ -559,7 +562,7 @@ if __name__ == '__main__':
 
     # CTRL + C -> Wait for threads to finish and leave
     except KeyboardInterrupt:
-        print("\nMeasurement stopped by user. Waiting for threads to finish...")
+        print("\nScript stopped by user. Waiting for threads to finish...")
         running = False
         time.sleep(5)
         GPIO.cleanup()
