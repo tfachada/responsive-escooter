@@ -42,7 +42,7 @@ if args.nominatim:
 
 ## Ignore "channel already in use" warning
 GPIO.setwarnings(False)
- 
+
 ## GPIO Mode (BOARD / BCM)
 GPIO.setmode(GPIO.BCM)
 
@@ -166,11 +166,11 @@ noride_report_button_button_pressed = False
 # FUNCTIONS
 
 def measure_distance(sensor, location, distance):
-    
+
     global road_danger_left
     global road_danger_middle
     global road_danger_right
-    
+
     while(running):
         try:
             distance = sensor.get_distance()
@@ -181,13 +181,13 @@ def measure_distance(sensor, location, distance):
                     road_danger_left = True
                 else:
                     road_danger_left = False
-                
-            else if sensor == tof_middle:
+
+            elif sensor == tof_middle:
                 if distance < 500:
                     road_danger_middle = True
                 else:
                     road_danger_middle = False
-            
+
             else:
                 if distance < 500:
                     road_danger_right = True
@@ -199,9 +199,9 @@ def measure_distance(sensor, location, distance):
             break
 
 def measure_temperature_humidity():
-    
+
     global unfavorable_weather_sensors
-    
+
     while(running):
         try:
             result = DHT_SENSOR.read()
@@ -211,22 +211,23 @@ def measure_temperature_humidity():
             print("Humidity: %.1f" % humidity + "%")
             data["Temperature"] = temperature
             data["Humidity"] = humidity
+
+            if humidity > 60 or temperature > 30:
+                unfavorable_weather_sensors = True
+            else:
+                unfavorable_weather_sensors = False
+
         except TimeoutError:
             pass
-
-        if humidity > 60 or temperature > 30:
-            unfavorable_weather_sensors = True
-        else:
-            unfavorable_weather_sensors = False
 
         time.sleep(1)
 
 def measure_air_quality():
-    
+
     global pollution
-    
+
     mq = MQ()
-    
+
     while(running):
         aqi = mq.MQPercentage()["SMOKE"]
         print("Air Quality Index: %f" % aqi)
@@ -240,10 +241,10 @@ def measure_air_quality():
         time.sleep(1)
 
 def measure_position_data():
-    
+
     global dangerous_driving
     global road_danger_acceleration
-    
+
     MPU_Init()
 
     while running:
@@ -265,7 +266,7 @@ def measure_position_data():
         Gx = gyro_x/131.0
         Gy = gyro_y/131.0
         Gz = gyro_z/131.0
-        
+
         # Fall detection
         if abs(Gy) > 5:
             dangerous_driving = True
@@ -312,7 +313,7 @@ def get_coordinates():
                     longitude = gps_data[4]
                     speed = gps_data[6]
                     altitude = gps_data[5]
-                    
+
                     print(f"Timestamp: {timestamp}, Latitude: {latitude}, Longitude: {longitude}, Altitude: {altitude}, Speed: {speed}")
                     data["Latitude"] = latitude
                     data["Longitude"] = longitude
@@ -354,16 +355,13 @@ def check_map_data():
 
         # Iterate through the data
         for entry in data:
-            print("Checking...")
             if (entry["min_lon"] <= float(longitude) <= entry["max_lon"] and
                 entry["min_lat"] <= float(latitude) <= entry["max_lat"]):
                 map_values["road_danger"] = entry["road_danger"]
                 map_values["wet_pavement"] = entry["wet_pavement"]
                 map_values["forbidden_zone"] = entry["forbidden_zone"]
                 break
-            else:
-                print("Not found for %f, %f" % (latitude, longitude))
-        
+
         if map_values["road_danger"] == 1:
             road_danger = True
         else:
@@ -432,7 +430,11 @@ def check_status_aux(status, led, button, button_pressed):
 
 
 def check_status():
-    
+
+    global danger_button_pressed
+    global weather_button_pressed
+    global pollution_button_pressed
+
     while(running):
 
         # Flash periodically if the user cannot ride there. Cannot be dismissed.
@@ -454,7 +456,7 @@ def check_status():
             # Aglomerate equivalent cases (different sensors, use of GPS...)
             road_danger = road_danger_left or road_danger_middle or road_danger_right or road_danger_acceleration or road_danger_gps
             unfavorable_weather = unfavorable_weather_sensors or wet_pavement
-            
+
             # Check LED/Button status (dangerous driving only has a LED)
             check_status_aux(dangerous_driving, DRIVING_LED, False, False)
             danger_button_pressed = check_status_aux(road_danger, DANGER_LED, DANGER_BUTTON, danger_button_pressed)
@@ -466,24 +468,24 @@ def check_status():
                 GPIO.output(VIBRATION_PIN, GPIO.HIGH)
             else:
                 GPIO.output(VIBRATION_PIN, GPIO.LOW)
-                
+
             # Ability to report any non-detected status (except dangerous driving) with a button
-            
+
             if GPIO.input(NORIDE_REPORT_BUTTON) == GPIO.HIGH:
                 data["No-ride report"] = True
             else:
                 data["No-ride report"] = False
-            
+
             if GPIO.input(DANGER_BUTTON) == GPIO.HIGH and not danger_button_pressed:
                 data["Danger report"] = True
             else:
                 data["Danger report"] = False
-            
+
             if GPIO.input(WEATHER_BUTTON) == GPIO.HIGH and not weather_button_pressed:
                 data["Weather report"] = True
             else:
                 data["Weather report"] = False
-            
+
             if GPIO.input(POLLUTION_BUTTON) == GPIO.HIGH and not pollution_button_pressed:
                 data["Pollution report"] = True
             else:
@@ -508,13 +510,13 @@ if __name__ == '__main__':
         gps_thread = threading.Thread(target=get_coordinates)
 
         map_json_thread = threading.Thread(target=check_map_data)
-        
+
         csv_thread = threading.Thread(target=write_latest_values)
         sending_thread = threading.Thread(target=multicast_sender, args=(csv_file, MCAST_GROUP_A, MCAST_PORT,), daemon = True)
         receiving_thread = threading.Thread(target=multicast_receiver, args=(RECV_OUTPUT_DIR, MCAST_GROUP_B, MCAST_PORT,), daemon = True)
 
         actuation_thread = threading.Thread(target=check_status)
-        
+
 
         left_distance_thread.start()
         middle_distance_thread.start()
@@ -525,13 +527,13 @@ if __name__ == '__main__':
         gps_thread.start()
 
         map_json_thread.start()
-        
+
         csv_thread.start()
         sending_thread.start()
         receiving_thread.start()
 
         actuation_thread.start()
-        
+
 
         left_distance_thread.join()
         middle_distance_thread.join()
@@ -554,7 +556,7 @@ if __name__ == '__main__':
             map_db_thread = threading.Thread(target=check_map_data_nominatim)
             map_db_thread.start()
             map_db_thread.join()
- 
+
     # CTRL + C -> Wait for threads to finish and leave
     except KeyboardInterrupt:
         print("\nMeasurement stopped by user. Waiting for threads to finish...")
