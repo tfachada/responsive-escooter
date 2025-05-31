@@ -113,9 +113,6 @@ GPIO.setup(VIBRATION_PIN, GPIO.OUT)
 ## State variable for threads
 running = True
 
-## Mutex for the CSV values to match their timestamp
-timestamp_mutex = threading.Lock()
-
 ## Name of the CSV file for this trip
 csv_file = datetime.today().strftime("%Y%m%d_%H%M%S") + ".csv"
 
@@ -144,9 +141,12 @@ distance_left = 10000
 distance_middle = 10000
 distance_right = 10000
 
-## Coordinates (used by the geofencing threads)
+## Coordinates (used by the geolocation thread)
 latitude = -1
 longitude = -1
+
+## Timestamp (updated by the GPS module)
+timestamp = datetime.today().strftime("%H:%M:%S")
 
 
 # STATUS INDICATORS
@@ -158,7 +158,6 @@ dangerous_driving = False
 road_danger_left = False
 road_danger_middle = False
 road_danger_right = False
-road_danger_acceleration = False
 road_danger_gps = False
 
 unfavorable_weather_sensors = False
@@ -166,14 +165,28 @@ wet_pavement = False
 
 pollution = False
 
-forbidden_zone = False
-forbidden_zone_nominatim = False
+noride_zone = False
+noride_zone_nominatim = False
 
 ## Button presses
 danger_button_pressed = False
 weather_button_pressed = False
 pollution_button_pressed = False
-noride_report_button_button_pressed = False
+noride_report_button_pressed = False
+
+## Mutexes
+i2c_mutex = threading.Lock()
+
+## Sampling and processing intervals
+distance_interval = 1
+dht_interval = 1
+mpu_interval = 0.5
+air_interval = 0
+gps_interval = 3
+json_interval = 5
+nominatim_interval = 0
+logging_interval = 5
+check_status_interval = 1
 
 
 # FUNCTIONS
@@ -186,7 +199,9 @@ def measure_distance(sensor, location, distance):
 
     while(running):
         try:
-            distance = sensor.get_distance()
+            with i2c_mutex:
+                distance = sensor.get_distance()
+            
             print ("Distance (%s): %d mm" % (location, distance))
 
             if sensor == tof_left:
@@ -207,7 +222,7 @@ def measure_distance(sensor, location, distance):
                 else:
                     road_danger_right = False
 
-            time.sleep(1)
+            time.sleep(distance_interval)
         except KeyboardInterrupt:
             break
 
@@ -233,7 +248,7 @@ def measure_temperature_humidity():
         except TimeoutError:
             pass
 
-        time.sleep(1)
+        time.sleep(dht_interval)
 
 def measure_air_quality():
 
@@ -244,28 +259,28 @@ def measure_air_quality():
         print("Air Quality Index: %f" % aqi)
         data["AQI"] = aqi
 
-        if aqi > 0.1:
+        if aqi > 0.15:
             pollution = True
         else:
             pollution = False
-
-        time.sleep(1)
+        
+        time.sleep(air_interval)
 
 def measure_position_data():
 
     global dangerous_driving
-    global road_danger_acceleration
 
     while running:
-        # Read Accelerometer raw value
-        acc_x = read_raw_data(ACCEL_XOUT_H)
-        acc_y = read_raw_data(ACCEL_YOUT_H)
-        acc_z = read_raw_data(ACCEL_ZOUT_H)
+        with i2c_mutex:
+            # Read Accelerometer raw value
+            acc_x = read_raw_data(ACCEL_XOUT_H)
+            acc_y = read_raw_data(ACCEL_YOUT_H)
+            acc_z = read_raw_data(ACCEL_ZOUT_H)
 
-        # Read Gyroscope raw value
-        gyro_x = read_raw_data(GYRO_XOUT_H)
-        gyro_y = read_raw_data(GYRO_YOUT_H)
-        gyro_z = read_raw_data(GYRO_ZOUT_H)
+            # Read Gyroscope raw value
+            gyro_x = read_raw_data(GYRO_XOUT_H)
+            gyro_y = read_raw_data(GYRO_YOUT_H)
+            gyro_z = read_raw_data(GYRO_ZOUT_H)
 
         # Full scale range +/- 250 degree/C as per sensitivity scale factor
         Ax = acc_x/16384.0
@@ -283,12 +298,13 @@ def measure_position_data():
             dangerous_driving = False
 
         print("Gx=%.2f" %Gx, u'\u00b0'+ "/s", "\tGy=%.2f" %Gy, u'\u00b0'+ "/s", "\tGz=%.2f" %Gz, u'\u00b0'+ "/s", "\tAx=%.2f g" %Ax, "\tAy=%.2f g" %Ay, "\tAz=%.2f g" %Az)
-        sleep(0.5)
+        sleep(mpu_interval)
 
 def get_coordinates():
 
     global latitude
     global longitude
+    global timestamp
 
     # Open serial port
     ser = serial.Serial('/dev/ttyAMA0', baudrate=115200, timeout=1)
@@ -322,11 +338,13 @@ def get_coordinates():
                     data["Longitude"] = longitude
                     data["Altitude"] = altitude
                     data["Speed"] = speed
+                else:
+                    timestamp = datetime.today().strftime("%H:%M:%S")   # Default timestamp value
             except IndexError:
                 pass
 
             # Wait for a few seconds before sending the next command
-            time.sleep(5)
+            time.sleep(gps_interval)
 
     finally:
         # Disable GNSS module
@@ -338,10 +356,9 @@ def get_coordinates():
 
 def check_map_data():
 
-    global road_danger
     global road_danger_gps
     global wet_pavement
-    global forbidden_zone
+    global noride_zone
 
     while(running):
 
@@ -349,7 +366,7 @@ def check_map_data():
         map_values = {
             "road_danger": 0,
             "wet_pavement": 0,
-            "forbidden_zone": 0
+            "noride_zone": 0
         }
 
         # Read the JSON file
@@ -362,11 +379,11 @@ def check_map_data():
                 entry["min_lat"] <= float(latitude) <= entry["max_lat"]):
                 map_values["road_danger"] = entry["road_danger"]
                 map_values["wet_pavement"] = entry["wet_pavement"]
-                map_values["forbidden_zone"] = entry["forbidden_zone"]
+                map_values["noride_zone"] = entry["noride_zone"]
                 break
 
         if map_values["road_danger"] == 1:
-            road_danger = True
+            road_danger_gps = True
         else:
             road_danger_gps = False
 
@@ -375,16 +392,16 @@ def check_map_data():
         else:
             wet_pavement = False
 
-        if map_values["forbidden_zone"] == 1:
-            forbidden_zone = True
+        if map_values["noride_zone"] == 1:
+            noride_zone = True
         else:
-            forbidden_zone = False
+            noride_zone = False
 
-        time.sleep(5)
+        time.sleep(json_interval)
 
 def check_map_data_nominatim():
 
-    global forbidden_zone_nominatim
+    global noride_zone_nominatim
 
     while(running):
 
@@ -398,12 +415,14 @@ def check_map_data_nominatim():
                 print("Error. Invalid coordinates.")
 
             if place_type == "amenity":
-                forbidden_zone_nominatim = True
+                noride_zone_nominatim = True
             else:
-                forbidden_zone_nominatim = False
+                noride_zone_nominatim = False
 
         except ConnectionRefusedError:
             print("Error. If running with --nominatim, please turn on Nominatim, and wait for its initialization.")
+        
+        time.sleep(nominatim_interval)
 
 def write_to_file(row_of_values):
     with open(csv_file, mode='a', newline='') as file:
@@ -412,11 +431,10 @@ def write_to_file(row_of_values):
 
 def write_latest_values():
     while running:
-        time.sleep(5)
-        with timestamp_mutex:
-            data["Date"] = datetime.today().strftime("%Y-%m-%d")
-            data["Timestamp"] = datetime.today().strftime("%H:%M:%S")
-            write_to_file(data.values())
+        time.sleep(logging_interval)
+        data["Date"] = datetime.today().strftime("%Y-%m-%d")
+        data["Timestamp"] = timestamp
+        write_to_file(data.values())
 
 # Checks if a special status needs to be triggered, and turns off LED if user pressed button to dismiss. Called by check_status.
 def check_status_aux(status, led, button, button_pressed):
@@ -441,14 +459,16 @@ def check_status():
     while(running):
 
         # Flash periodically if the user cannot ride there. Cannot be dismissed.
-        if forbidden_zone or forbidden_zone_nominatim:
-            print("Forbidden zone!")
+        if noride_zone or noride_zone_nominatim:
+            print("No-ride zone!")
             GPIO.output(VIBRATION_PIN, GPIO.HIGH)
             GPIO.output(DANGER_LED, GPIO.HIGH)
             GPIO.output(WEATHER_LED, GPIO.HIGH)
             GPIO.output(POLLUTION_LED, GPIO.HIGH)
             GPIO.output(DRIVING_LED, GPIO.HIGH)
-            time.sleep(.5)
+            
+            time.sleep(check_status_interval / 2)
+            
             GPIO.output(VIBRATION_PIN, GPIO.LOW)
             GPIO.output(DANGER_LED, GPIO.LOW)
             GPIO.output(WEATHER_LED, GPIO.LOW)
@@ -457,7 +477,7 @@ def check_status():
 
         else:
             # Aglomerate equivalent cases (different sensors, use of GPS...)
-            road_danger = road_danger_left or road_danger_middle or road_danger_right or road_danger_acceleration or road_danger_gps
+            road_danger = road_danger_left or road_danger_middle or road_danger_right or road_danger_gps
             unfavorable_weather = unfavorable_weather_sensors or wet_pavement
 
             # Check LED/Button status (dangerous driving only has a LED)
@@ -494,7 +514,7 @@ def check_status():
             else:
                 data["Pollution report"] = False
 
-        time.sleep(1)
+        time.sleep(check_status_interval)
 
 
 if __name__ == '__main__':

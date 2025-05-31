@@ -6,7 +6,7 @@
         "max_lat": 38.74,
         "road_danger": 1,
         "wet_pavement": 1,
-        "forbidden_zone": 1
+        "noride_zone": 1
     },
     {
         "min_lon": -9.4,
@@ -15,7 +15,7 @@
         "max_lat": 38.8,
         "road_danger": 0,
         "wet_pavement": 0,
-        "forbidden_zone": 1
+        "noride_zone": 1
     }
 ]
 
